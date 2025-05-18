@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Enhanced WebXR Panel Interface</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- XR Extras for improved Quest 3 support -->
+  <meta name="xr-spatial-tracking" content="true">
+  <style>
+    body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; background: #f0f2f5; }
+    #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
+    #start-button { padding: 15px 28px; font-size: 18px; background: #4876FF; color: white; border: none; border-radius: 12px; box-shadow: 0 4px 14px rgba(72,118,255,0.4); cursor: pointer; transition: all 0.2s; font-weight: 600; }
+    #start-button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(72,118,255,0.5); }
+    #status { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: white; padding: 12px 24px; border-radius: 12px; font-size: 16px; font-weight: 500; display: none; z-index: 1000; }
+    .exit-ar { position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 50%; width: 46px; height: 46px; display: none; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; z-index: 1000; }
+    .xr-active .exit-ar { display: flex; }
+    video { display: none; }
+    
+    /* Settings Panel Styles */
+    #settings-panel { position: fixed; top: 20px; left: 20px; background: rgba(255,255,255,0.9); padding: 15px; border-radius: 10px; width: 300px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); z-index: 100; }
+    #settings-panel h3 { margin-top: 0; margin-bottom: 15px; font-size: 16px; }
+    .slider-container { margin-bottom: 12px; }
+    .slider-container label { display: block; margin-bottom: 5px; font-size: 14px; }
+    .slider-container input { width: 100%; }
+    .slider-container .value { font-size: 12px; color: #666; float: right; }
+  </style>
+</head>
+<body>
+  <div id="overlay"><button id="start-button">Start WebXR Panel Demo</button></div>
+  <button class="exit-ar" id="exit-ar">×</button>
+  <div id="status"></div>
+  
+  <div id="settings-panel">
+    <h3>Panel Settings</h3>
+    <div class="slider-container">
+      <label for="panel-width">Panel Width <span class="value">0.8</span></label>
+      <input type="range" id="panel-width" min="0.5" max="1.2" step="0.05" value="0.8">
+    </div>
+    <div class="slider-container">
+      <label for="panel-height">Panel Height <span class="value">0.5</span></label>
+      <input type="range" id="panel-height" min="0.3" max="0.8" step="0.05" value="0.5">
+    </div>
+    <div class="slider-container">
+      <label for="panel-opacity">Panel Opacity <span class="value">0.85</span></label>
+      <input type="range" id="panel-opacity" min="0.5" max="1" step="0.05" value="0.85">
+    </div>
+    <div class="slider-container">
+      <label for="panel-corner-radius">Corner Radius <span class="value">32</span></label>
+      <input type="range" id="panel-corner-radius" min="0" max="60" step="4" value="32">
+    </div>
+    <div class="slider-container">
+      <label for="panel-color">Panel Color</label>
+      <input type="color" id="panel-color" value="#0A0C10">
+    </div>
+    <div class="slider-container">
+      <label for="text-size">Text Size <span class="value">24</span></label>
+      <input type="range" id="text-size" min="16" max="36" step="2" value="24">
+    </div>
+    <div class="slider-container">
+      <label for="text-color">Text Color</label>
+      <input type="color" id="text-color" value="#FFFFFF">
+    </div>
+    <div class="slider-container">
+      <label for="button-size">Button Size <span class="value">0.05</span></label>
+      <input type="range" id="button-size" min="0.03" max="0.1" step="0.01" value="0.05">
+    </div>
+    <div class="slider-container">
+      <label for="button-color">Button Color</label>
+      <input type="color" id="button-color" value="#4876FF">
+    </div>
+    <div class="slider-container">
+      <label for="distance-from-camera">Distance from Camera <span class="value">0.7</span></label>
+      <input type="range" id="distance-from-camera" min="0.5" max="1.5" step="0.1" value="0.7">
+    </div>
+  </div>
+  
+  <video id="video-content" loop muted playsinline crossorigin="anonymous"></video>
+  
+  <script type="module">
+    // Updated to latest Three.js for better Quest 3 performance
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+    import { XRHandModelFactory } from 'https://unpkg.com/three@0.160.0/examples/jsm/webxr/XRHandModelFactory.js';
+
+    // Main variables
+    let camera, scene, renderer;
+    let controllers = [], hands = [];
+    let xrSession = null, xrReferenceSpace = null;
+    let raycaster, tempMatrix, panelSystem, settings = {};
+    let interactiveObjectsCache = [];
+    const intersected = [];
+    let interactionTimer = null;
+    
+    // Initialize settings with default values
+    function initSettings() {
+      settings = {
+        panelWidth: 0.8,
+        panelHeight: 0.5,
+        panelOpacity: 0.85,
+        panelCornerRadius: 32,
+        panelColor: "#0A0C10",
+        textSize: 24,
+        textColor: "#FFFFFF",
+        buttonSize: 0.05,
+        buttonColor: "#4876FF",
+        distanceFromCamera: 0.7
+      };
+      
+      // Add event listeners for sliders
+      document.querySelectorAll('#settings-panel input').forEach(input => {
+        input.addEventListener('input', updateSettingsValue);
+      });
+    }
+    
+    function updateSettingsValue(e) {
+      const settingId = e.target.id;
+      const valueElement = e.target.parentElement.querySelector('.value');
+      let value = e.target.value;
+      
+      if (settingId === 'panel-width') {
+        settings.panelWidth = parseFloat(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'panel-height') {
+        settings.panelHeight = parseFloat(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'panel-opacity') {
+        settings.panelOpacity = parseFloat(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'panel-corner-radius') {
+        settings.panelCornerRadius = parseInt(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'panel-color') {
+        settings.panelColor = value;
+      } else if (settingId === 'text-size') {
+        settings.textSize = parseInt(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'text-color') {
+        settings.textColor = value;
+      } else if (settingId === 'button-size') {
+        settings.buttonSize = parseFloat(value);
+        if (valueElement) valueElement.textContent = value;
+      } else if (settingId === 'button-color') {
+        settings.buttonColor = value;
+      } else if (settingId === 'distance-from-camera') {
+        settings.distanceFromCamera = parseFloat(value);
+        if (valueElement) valueElement.textContent = value;
+      }
+      
+      // Update panel if it exists
+      if (panelSystem) {
+        panelSystem.updatePanelSettings(settings);
+      }
+    }
+    
+    function init() {
+      // Initialize settings
+      initSettings();
+      
+      // Scene setup - now with post-processing for improved visuals
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+      
+      // Better camera setup for Quest 3 FOV
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+      
+      // Renderer setup with Quest 3 optimizations
+      renderer = new THREE.WebGLRenderer({ 
+        antialias: true, 
+        alpha: true,
+        powerPreference: "high-performance"
+      });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      renderer.setClearColor(0x000000, 0);
+      renderer.shadowMap.enabled = true;
+      renderer.outputColorSpace = THREE.SRGBColorSpace; // Color correction for XR
+      document.body.appendChild(renderer.domElement);
+
+      // Enhanced lighting for Quest 3
+      scene.add(new THREE.AmbientLight(0x404040, 2));
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      directionalLight.position.set(1, 1, 1).normalize();
+      directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 1024;
+      directionalLight.shadow.mapSize.height = 1024;
+      scene.add(directionalLight);
+      
+      // Interaction setup
+      raycaster = new THREE.Raycaster();
+      tempMatrix = new THREE.Matrix4();
+      panelSystem = new PanelSystem(settings);
+      
+      // Event listeners
+      window.addEventListener('resize', onWindowResize);
+      document.getElementById('start-button').addEventListener('click', startXRSession);
+      document.getElementById('exit-ar').addEventListener('click', () => { if (xrSession) xrSession.end(); });
+    }
+    
+    function onWindowResize() {
+      if (camera) {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+      }
+      if (renderer) renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // Start XR session with Quest 3 optimizations
+    function startXRSession() {
+      if (!navigator.xr) {
+        updateStatus('WebXR not supported in this browser.');
+        return;
+      }
+      
+      navigator.xr.isSessionSupported('immersive-ar')
+        .then(supported => {
+          if (supported) {
+            navigator.xr.requestSession('immersive-ar', { 
+              requiredFeatures: ['hit-test', 'local'],
+              optionalFeatures: ['dom-overlay', 'hand-tracking'], 
+              domOverlay: { root: document.body } 
+            })
+            .then(onSessionStarted)
+            .catch(err => {
+              // Try fallback to VR if AR fails
+              if (err.message.includes("not supported")) {
+                updateStatus('AR not available, trying VR mode instead...');
+                navigator.xr.isSessionSupported('immersive-vr')
+                  .then(vrSupported => {
+                    if (vrSupported) {
+                      navigator.xr.requestSession('immersive-vr', {
+                        optionalFeatures: ['hand-tracking']
+                      })
+                      .then(onSessionStarted)
+                      .catch(vrErr => updateStatus('Failed to start VR: ' + vrErr.message));
+                    } else {
+                      updateStatus('Neither AR nor VR is supported on this device.');
+                    }
+                  });
+              } else {
+                updateStatus('Failed to start AR: ' + err.message);
+              }
+            });
+          } else {
+            // Try VR mode if AR is not supported
+            updateStatus('AR not supported, trying VR mode...');
+            navigator.xr.isSessionSupported('immersive-vr')
+              .then(vrSupported => {
+                if (vrSupported) {
+                  navigator.xr.requestSession('immersive-vr', {
+                    optionalFeatures: ['hand-tracking']
+                  })
+                  .then(onSessionStarted)
+                  .catch(err => updateStatus('Failed to start VR: ' + err.message));
+                } else {
+                  updateStatus('Neither AR nor VR is supported on this device.');
+                }
+              });
+          }
+        });
+    }
+
+    // Enhanced session start with better Quest 3 support
+    function onSessionStarted(session) {
+      xrSession = session;
+      document.getElementById('start-button').style.display = 'none';
+      document.getElementById('settings-panel').style.display = 'none';
+      document.body.classList.add('xr-active');
+      
+      renderer.xr.setSession(session);
+      
+      session.requestReferenceSpace('local').then((refSpace) => {
+        xrReferenceSpace = refSpace;
+        
+        // Setup controllers with enhanced feedback for Quest 3
+        setupControllers();
+        
+        // Setup hand tracking specifically for Quest 3
+        setupHandTracking();
+        
+        // Initialize panel system with optimized parameters
+        panelSystem.init(scene, camera);
+        setTimeout(() => panelSystem.startPanelSequence(), 1000);
+        
+        renderer.setAnimationLoop(render);
+        session.addEventListener('end', onSessionEnd);
+        updateStatus('Panel system ready! Use controllers or hands to interact.');
+      });
+    }
+    
+    function setupControllers() {
+      // Setup Quest 3 controllers with improved visuals and haptics
+      controllers = [0, 1].map(i => {
+        const controller = renderer.xr.getController(i);
+        controller.userData.id = i;
+        controller.userData.isSelecting = false;
+        
+        // Visual indicator for controller position with ray
+        const controllerGroup = new THREE.Group();
+        
+        // Controller body
+        const controllerMesh = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.01, 0.02, 0.08, 16),
+          new THREE.MeshStandardMaterial({
+            color: i === 0 ? 0x4876FF : 0xFF4848,
+            metalness: 0.7,
+            roughness: 0.3
+          })
+        );
+        controllerMesh.rotation.x = -Math.PI / 2;
+        controllerMesh.position.z = -0.05;
+        controllerGroup.add(controllerMesh);
+        
+        // Controller ray
+        const ray = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.002, 0.002, 1, 8),
+          new THREE.MeshBasicMaterial({
+            color: i === 0 ? 0x4876FF : 0xFF4848,
+            transparent: true,
+            opacity: 0.6
+          })
+        );
+        ray.position.z = -0.5;
+        ray.rotation.x = -Math.PI / 2;
+        controllerGroup.add(ray);
+        
+        // Add dot at end of ray for better targeting
+        const dot = new THREE.Mesh(
+          new THREE.SphereGeometry(0.006, 8, 8),
+          new THREE.MeshBasicMaterial({
+            color: i === 0 ? 0x4876FF : 0xFF4848
+          })
+        );
+        dot.position.z = -1;
+        controllerGroup.add(dot);
+        
+        controller.add(controllerGroup);
+        
+        // Enhanced controller event handling
+        controller.addEventListener('selectstart', onControllerSelectStart);
+        controller.addEventListener('selectend', onControllerSelectEnd);
+        controller.addEventListener('connected', (event) => {
+          // Store controller profile for haptics
+          controller.userData.gamepad = event.data.gamepad;
+          controller.userData.handedness = event.data.handedness;
+        });
+        
+        scene.add(controller);
+        return controller;
+      });
+    }
+    
+    function setupHandTracking() {
+      // Add hand models for Quest 3 hand tracking
+      const handModelFactory = new XRHandModelFactory();
+      
+      hands = [0, 1].map(i => {
+        const hand = renderer.xr.getHand(i);
+        hand.userData.id = i;
+        
+        // Add visible hand model
+        const handModel = handModelFactory.createHandModel(hand, 'mesh');
+        handModel.visible = true;
+        hand.add(handModel);
+        
+        // Add hand pinch detection
+        hand.addEventListener('pinchstart', onHandPinchStart);
+        hand.addEventListener('pinchend', onHandPinchEnd);
+        
+        scene.add(hand);
+        return hand;
+      });
+    }
+    
+    function onHandPinchStart(event) {
+      const hand = event.target;
+      if (!hand) return;
+      
+      // Implement similar behavior as controller select
+      const indexTip = hand.joints['index-finger-tip'];
+      if (!indexTip) return;
+      
+      tempMatrix.identity().extractRotation(indexTip.matrixWorld);
+      raycaster.ray.origin.setFromMatrixPosition(indexTip.matrixWorld);
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+      
+      checkInteraction();
+    }
+    
+    function onHandPinchEnd() {
+      // Reset interaction state
+      updateInteraction(null);
+    }
+    
+    function onControllerSelectStart(event) {
+      const controller = event.target;
+      controller.userData.isSelecting = true;
+      
+      // Raycasting for interaction with better targeting
+      checkInteraction(controller);
+    }
+    
+    function onControllerSelectEnd(event) {
+      const controller = event.target;
+      controller.userData.isSelecting = false;
+      
+      // Reset interaction state
+      updateInteraction(null);
+    }
+    
+    function checkInteraction(controller) {
+      // Determine correct raycast origin: controller or hand
+      if (controller) {
+        tempMatrix.identity().extractRotation(controller.matrixWorld);
+        raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+      }
+      
+      // Enhanced caching of interactive objects for performance
+      if (interactionTimer === null) {
+        interactiveObjectsCache = panelSystem.getInteractiveObjects();
+        interactionTimer = setTimeout(() => { interactionTimer = null; }, 500);
+      }
+      
+      const intersects = raycaster.intersectObjects(interactiveObjectsCache, true);
+      
+      if (intersects.length > 0) {
+        // Find interactive parent with proper traversal
+        let current = intersects[0].object;
+        let interactiveObject = null;
+        
+        while (current && !interactiveObject) {
+          if (current.userData && current.userData.onClick) {
+            interactiveObject = current;
+          }
+          current = current.parent;
+        }
+        
+        if (interactiveObject) {
+          // Trigger click with haptic feedback
+          interactiveObject.userData.onClick();
+          triggerHapticFeedback(controller);
+          updateInteraction(interactiveObject);
+          return true;
+        }
+      }
+      
+      return false;
+    }
+    
+    function updateInteraction(object) {
+      // Reset all previously intersected objects
+      while (intersected.length) {
+        const interactedObj = intersected.pop();
+        if (interactedObj.material && interactedObj.userData.originalColor) {
+          interactedObj.material.color.copy(interactedObj.userData.originalColor);
+          delete interactedObj.userData.originalColor;
+          interactedObj.userData.isHovered = false;
+        }
+      }
+      
+      // Set new intersected object if provided
+      if (object && object.material) {
+        intersected.push(object);
+        if (!object.userData.isHovered) {
+          object.userData.originalColor = object.material.color.clone();
+          object.material.color.multiplyScalar(1.2);
+          object.userData.isHovered = true;
+        }
+      }
+    }
+    
+    function triggerHapticFeedback(controller) {
+      // Provide haptic feedback if available
+      if (controller && controller.userData.gamepad && controller.userData.gamepad.hapticActuators) {
+        const haptic = controller.userData.gamepad.hapticActuators[0];
+        if (haptic) {
+          try {
+            // Optimal pulse for Quest 3 controllers
+            haptic.pulse(0.7, 50);
+          } catch (error) {
+            console.warn('Haptic feedback error:', error);
+          }
+        }
+      }
+    }
+    
+    function onSessionEnd() {
+      document.body.classList.remove('xr-active');
+      document.getElementById('start-button').style.display = 'block';
+      document.getElementById('settings-panel').style.display = 'block';
+      document.getElementById('status').style.display = 'none';
+      controllers = [];
+      hands = [];
+      renderer.setAnimationLoop(null);
+      xrSession = null;
+      
+      // Clean up scene with better object disposal
+      cleanupScene();
+      
+      // Pause videos
+      document.querySelectorAll('video').forEach(video => video.pause());
+    }
+    
+    function cleanupScene() {
+      // Properly dispose of all objects
+      scene.traverse(object => {
+        if (object.geometry) object.geometry.dispose();
+        
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach(material => disposeMaterial(material));
+          } else {
+            disposeMaterial(object.material);
+          }
+        }
+      });
+      
+      // Clear scene
+      while(scene.children.length > 0) { 
+        scene.remove(scene.children[0]); 
+      }
+    }
+    
+    function disposeMaterial(material) {
+      // Dispose of textures and other properties
+      if (material.map) material.map.dispose();
+      if (material.lightMap) material.lightMap.dispose();
+      if (material.bumpMap) material.bumpMap.dispose();
+      if (material.normalMap) material.normalMap.dispose();
+      if (material.specularMap) material.specularMap.dispose();
+      if (material.envMap) material.envMap.dispose();
+      material.dispose();
+    }
+    
+    function render(timestamp, frame) {
+      if (frame) {
+        const session = frame.session;
+        const referenceSpace = xrReferenceSpace;
+        
+        // Update controllers with optimized check
+        controllers.forEach(controller => {
+          if (controller.userData.isSelecting) {
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+            
+            // Only check hover states every other frame for performance
+            if (timestamp % 2 === 0) {
+              const intersects = raycaster.intersectObjects(interactiveObjectsCache, true);
+              if (intersects.length > 0) {
+                const object = intersects[0].object;
+                updateInteraction(object);
+              } else {
+                updateInteraction(null);
+              }
+            }
+          }
+        });
+        
+        // Update panel system with frame time for smooth animations
+        if (panelSystem) panelSystem.update(camera, timestamp);
+      }
+      
+      renderer.render(scene, camera);
+    }
+    
+    function updateStatus(message) {
+      const statusElement = document.getElementById('status');
+      statusElement.textContent = message;
+      statusElement.style.display = 'block';
+      
+      // Auto-hide after 4 seconds for non-error messages
+      if (!message.includes('error') && !message.includes('not supported')) {
+        setTimeout(() => { statusElement.style.display = 'none'; }, 4000);
+      }
+    }
+    
+    // Optimized Panel System for Quest 3
+    class PanelSystem {
+      constructor(settings) {
+        this.settings = settings;
+        this.panel = null;
+        this.currentPanelIndex = 0;
+        this.isActive = false;
+        this.nextButton = null;
+        this.textElement = null;
+        this.videoElement = null;
+        this.panelGroup = null;
+        this.videoTexture = null;
+        this.panelLastPosition = new THREE.Vector3();
+        this.panelTargetPosition = new THREE.Vector3();
+        this.needsUpdate = false;
+        
+        // Better panel content with optimized video loading
+        this.panelSequence = [
+          { 
+            message: "Welcome to the WebXR panel interface. This demonstrates a clean, modern UI for Quest 3.",
+            showVideo: false
+          },
+          { 
+            message: "Let's take a look at how video content can be seamlessly integrated into the panels.",
+            showVideo: true,
+            videoSrc: "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
+          },
+          { 
+            message: "Notice how we've centered the text for better readability. The panel follows your movement for comfort.",
+            showVideo: false
+          },
+          { 
+            message: "Videos can be displayed directly in the panel, like this example of ocean waves.",
+            showVideo: true,
+            videoSrc: "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
+          },
+          { 
+            message: "The panel system is highly customizable through sliders, allowing you to adjust appearance in real-time.",
+            showVideo: false
+          }
+        ];
+        
+        // Preload video with better error handling
+        this.videoElement = document.getElementById('video-content');
+        this.videoTexture = new THREE.VideoTexture(this.videoElement);
+        this.videoTexture.minFilter = THREE.LinearFilter;
+        this.videoTexture.magFilter = THREE.LinearFilter;
+        this.videoTexture.colorSpace = THREE.SRGBColorSpace;
+        this.videoMaterial = new THREE.MeshBasicMaterial({
+          map: this.videoTexture,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+        
+        // Preload canvases for better performance
+        this.textCanvases = [];
+        this.buttonCanvas = document.createElement('canvas');
+        this.buttonCanvas.width = 128;
+        this.buttonCanvas.height = 128;
+        this.buttonCtx = this.buttonCanvas.getContext('2d');
+        this.buttonTexture = new THREE.CanvasTexture(this.buttonCanvas);
+      }
+      
+      init(scene, camera) {
+        this.scene = scene;
+        this.camera = camera;
+        
+        // Create panel group with better positioning
+        this.panelGroup = new THREE.Group();
+        this.panelGroup.position.set(0, 0, -this.settings.distanceFromCamera);
+        this.scene.add(this.panelGroup);
+        
+        // Pre-create canvases for better performance
+        for (let i = 0; i < this.panelSequence.length; i++) {
+          const canvas = document.createElement('canvas');
+          canvas.width = 1024;
+          canvas.height = 512;
+          this.textCanvases.push({
+            canvas: canvas,
+            context: canvas.getContext('2d')
+          });
+        }
+        
+        this.createPanel();
+      }
+      
+      createPanel() {
+        const panel = new THREE.Group();
+        const panelWidth = this.settings.panelWidth;
+        const panelHeight = this.settings.panelHeight;
+        
+        // Create background with optimized rendering
+        this.updatePanelBackground(panel, panelWidth, panelHeight);
+        
+        // Create and optimize text elements
+        this.createTextElement(panel, panelWidth, panelHeight);
+        
+        // Video display with better performance
+        this.createVideoDisplay(panel, panelWidth, panelHeight);
+        
+        // Next button with improved visuals
+        this.createNextButton(panel, panelWidth, panelHeight);
+        
+        this.panelGroup.add(panel);
+        this.panel = panel;
+        this.panel.visible = false;
+      }
+      
+      createTextElement(panel, panelWidth, panelHeight) {
+        // Create text element with pre-allocated canvas
+        const textCanvas = this.textCanvases[0].canvas;
+        const textTexture = new THREE.CanvasTexture(textCanvas);
+        
+        this.textElement = new THREE.Mesh(
+          new THREE.PlaneGeometry(panelWidth * 0.9, panelHeight * 0.7),
+          new THREE.MeshBasicMaterial({
+            map: textTexture,
+            transparent: true,
+            side: THREE.DoubleSide
+          })
+        );
+        this.textElement.position.set(0, 0.04, 0.001);
+        
+        this.textElement.userData.updateText = (text, index) => {
+          // Get the pre-allocated canvas for this panel
+          const textCanvas = this.textCanvases[index] ? this.textCanvases[index].canvas : this.textCanvases[0].canvas;
+          const textCtx = this.textCanvases[index] ? this.textCanvases[index].context : this.textCanvases[0].context;
+          
+          textCtx.clearRect(0, 0, 1024, 512);
+          
+          // Set text properties
+          textCtx.font = `${this.settings.textSize}px sans-serif`;
+          textCtx.fillStyle = this.settings.textColor;
+          textCtx.textAlign = 'center';
+          textCtx.textBaseline = 'top';
+          
+          // Word wrap with center alignment
+          const words = text.split(' ');
+          const maxWidth = 900;
+          let line = '';
+          let lineY = 50;
+          const lineHeight = this.settings.textSize * 1.4;
+          
+          for (let i = 0; i < words.length; i++) {
+            const testLine = line + words[i] + ' ';
+            const metrics = textCtx.measureText(testLine);
+            
+            if (metrics.width > maxWidth && i > 0) {
+              textCtx.fillText(line, 512, lineY);
+              line = words[i] + ' ';
+              lineY += lineHeight;
+            } else {
+              line = testLine;
+            }
+          }
+          
+          textCtx.fillText(line, 512, lineY);
+          
+          // Update texture
+          this.textElement.material.map = new THREE.CanvasTexture(textCanvas);
+          this.textElement.material.needsUpdate = true;
+        };
+        
+        panel.add(this.textElement);
+      }
+      
+      createVideoDisplay(panel, panelWidth, panelHeight) {
+        // Optimized video display
+        this.videoDisplay = new THREE.Mesh(
+          new THREE.PlaneGeometry(panelWidth * 0.7, panelHeight * 0.5),
+          this.videoMaterial
+        );
+        this.videoDisplay.position.set(0, 0, 0.002);
+        this.videoDisplay.visible = false;
+        panel.add(this.videoDisplay);
+      }
+      
+      createNextButton(panel, panelWidth, panelHeight) {
+        // Pre-render button states for performance
+        const buttonCanvas = this.buttonCanvas;
+        const buttonCtx = this.buttonCtx;
+        const buttonTexture = this.buttonTexture;
+        
+        // Draw button with improved visuals
+        const drawButton = (hover) => {
+          buttonCtx.clearRect(0, 0, 128, 128);
+          
+          // Parse the hex color to RGB
+          let buttonColor = this.settings.buttonColor;
+          const r = parseInt(buttonColor.slice(1, 3), 16);
+          const g = parseInt(buttonColor.slice(3, 5), 16);
+          const b = parseInt(buttonColor.slice(5, 7), 16);
+          
+          // Create hover color (slightly lighter)
+          const hoverColor = hover ? 
+            `rgba(${Math.min(r + 25, 255)}, ${Math.min(g + 25, 255)}, ${Math.min(b + 25, 255)}, 1)` : 
+            `rgba(${r}, ${g}, ${b}, 1)`;
+          
+          // Drop shadow for depth
+          buttonCtx.shadowColor = 'rgba(0,0,0,0.5)';
+          buttonCtx.shadowBlur = 15;
+          buttonCtx.shadowOffsetX = 0;
+          buttonCtx.shadowOffsetY = 5;
+          
+          // Draw background circle
+          buttonCtx.beginPath();
+          buttonCtx.arc(64, 64, 50, 0, 2 * Math.PI);
+          buttonCtx.fillStyle = hoverColor;
+          buttonCtx.fill();
+          
+          // Remove shadow for arrow
+          buttonCtx.shadowColor = 'transparent';
+          
+          // Draw arrow with better design
+          buttonCtx.beginPath();
+          buttonCtx.moveTo(45, 45);
+          buttonCtx.lineTo(83, 64);
+          buttonCtx.lineTo(45, 83);
+          buttonCtx.closePath();
+          buttonCtx.fillStyle = 'white';
+          buttonCtx.fill();
+          
+          // Add subtle gradient overlay
+          const gradient = buttonCtx.createLinearGradient(0, 30, 0, 100);
+          gradient.addColorStop(0, 'rgba(255, 255, 255, 0.2)');
+          gradient.addColorStop(1, 'rgba(0, 0, 0, 0.1)');
+          buttonCtx.beginPath();
+          buttonCtx.arc(64, 64, 50, 0, 2 * Math.PI);
+          buttonCtx.fillStyle = gradient;
+          buttonCtx.fill();
+          
+          buttonTexture.needsUpdate = true;
+        };
+        
+        drawButton(false);
+        
+        this.nextButton = new THREE.Mesh(
+          new THREE.PlaneGeometry(this.settings.buttonSize, this.settings.buttonSize),
+          new THREE.MeshBasicMaterial({
+            map: buttonTexture,
+            transparent: true,
+            side: THREE.DoubleSide,
+            depthTest: false
+          })
+        );
+        
+        this.nextButton.position.set((panelWidth/2) - this.settings.buttonSize * 1.5, -(panelHeight/2) + this.settings.buttonSize * 1.5, 0.002);
+        
+        this.nextButton.userData.onClick = () => {
+          this.showNextPanel();
+          
+          // Visual feedback
+          drawButton(true);
+          setTimeout(() => drawButton(false), 200);
+        };
+        
+        panel.add(this.nextButton);
+        return this.nextButton;
+      }
+      
+      updatePanelSettings(newSettings) {
+        // Store new settings
+        this.settings = {...newSettings};
+        this.needsUpdate = true;
+        
+        // Update panel if it exists
+        if (this.panel) {
+          const panelWidth = this.settings.panelWidth;
+          const panelHeight = this.settings.panelHeight;
+          
+          // Update background
+          this.updatePanelBackground(this.panel, panelWidth, panelHeight);
+          
+          // Update text element
+          if (this.textElement) {
+            this.textElement.geometry.dispose();
+            this.textElement.geometry = new THREE.PlaneGeometry(panelWidth * 0.9, panelHeight * 0.7);
+            this.textElement.position.set(0, 0.04, 0.001);
+            
+            // Update text content
+            const currentPanel = this.panelSequence[this.currentPanelIndex];
+            if (currentPanel) {
+              this.textElement.userData.updateText(currentPanel.message, this.currentPanelIndex);
+            }
+          }
+          
+          // Update video display
+          if (this.videoDisplay) {
+            this.videoDisplay.geometry.dispose();
+            this.videoDisplay.geometry = new THREE.PlaneGeometry(panelWidth * 0.7, panelHeight * 0.5);
+          }
+          
+          // Update next button
+          if (this.nextButton) {
+            this.nextButton.geometry.dispose();
+            this.nextButton.geometry = new THREE.PlaneGeometry(this.settings.buttonSize, this.settings.buttonSize);
+            this.nextButton.position.set(
+              (panelWidth/2) - this.settings.buttonSize * 1.5, 
+              -(panelHeight/2) + this.settings.buttonSize * 1.5, 
+              0.002
+            );
+          }
+        }
+      }
+      
+      updatePanelBackground(panel, panelWidth, panelHeight) {
+        // Remove previous background if exists
+        panel.children.forEach(child => {
+          if (child.userData.isBackground) {
+            panel.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+          }
+        });
+        
+        // Create background with optimized rendering
+        const bgCanvas = document.createElement('canvas');
+        bgCanvas.width = 1024;
+        bgCanvas.height = 512;
+        const bgCtx = bgCanvas.getContext('2d');
+        
+        // Parse the hex color to RGB
+        let panelColor = this.settings.panelColor;
+        const r = parseInt(panelColor.slice(1, 3), 16);
+        const g = parseInt(panelColor.slice(3, 5), 16);
+        const b = parseInt(panelColor.slice(5, 7), 16);
+        
+        // Draw rounded rectangle for panel background
+        const cornerRadius = this.settings.panelCornerRadius;
+        bgCtx.fillStyle = `rgba(${r}, ${g}, ${b}, ${this.settings.panelOpacity})`;
+        bgCtx.beginPath();
+        bgCtx.moveTo(cornerRadius, 0);
+        bgCtx.lineTo(bgCanvas.width - cornerRadius, 0);
+        bgCtx.quadraticCurveTo(bgCanvas.width, 0, bgCanvas.width, cornerRadius);
+        bgCtx.lineTo(bgCanvas.width, bgCanvas.height - cornerRadius);
+        bgCtx.quadraticCurveTo(bgCanvas.width, bgCanvas.height, bgCanvas.width - cornerRadius, bgCanvas.height);
+        bgCtx.lineTo(cornerRadius, bgCanvas.height);
+        bgCtx.quadraticCurveTo(0, bgCanvas.height, 0, bgCanvas.height - cornerRadius);
+        bgCtx.lineTo(0, cornerRadius);
+        bgCtx.quadraticCurveTo(0, 0, cornerRadius, 0);
+        bgCtx.closePath();
+        bgCtx.fill();
+        
+        // Add subtle border for Quest 3's higher resolution
+        bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        bgCtx.lineWidth = 2;
+        bgCtx.stroke();
+        
+        // Add a slight gradient overlay for depth
+        const gradient = bgCtx.createLinearGradient(0, 0, 0, bgCanvas.height);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.1)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0.1)');
+        bgCtx.fillStyle = gradient;
+        bgCtx.fill();
+        
+        // Add subtle shadow for Quest 3 depth perception
+        bgCtx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        bgCtx.shadowBlur = 20;
+        bgCtx.shadowOffsetX = 0;
+        bgCtx.shadowOffsetY = 10;
+        bgCtx.stroke();
+        
+        const backgroundMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(panelWidth, panelHeight),
+          new THREE.MeshBasicMaterial({
+            map: new THREE.CanvasTexture(bgCanvas),
+            transparent: true,
+            side: THREE.DoubleSide
+          })
+        );
+        
+        backgroundMesh.userData.isBackground = true;
+        panel.add(backgroundMesh);
+        
+        // Make sure it's at the back
+        panel.children.forEach(child => {
+          if (child !== backgroundMesh) {
+            panel.remove(child);
+            panel.add(child);
+          }
+        });
+        
+        return backgroundMesh;
+      }
+      
+      startPanelSequence() {
+        this.isActive = true;
+        this.currentPanelIndex = 0;
+        this.panel.visible = true;
+        this.showCurrentPanel();
+      }
+      
+      showCurrentPanel() {
+        if (this.currentPanelIndex >= this.panelSequence.length) {
+          this.currentPanelIndex = 0;
+        }
+        
+        const panel = this.panelSequence[this.currentPanelIndex];
+        
+        // Update text with index for optimized canvas usage
+        this.textElement.userData.updateText(panel.message, this.currentPanelIndex);
+        
+        // Handle video display with better optimization
+        if (panel.showVideo && panel.videoSrc) {
+          // Position video in the center
+          this.videoDisplay.visible = true;
+          this.textElement.visible = false;
+          
+          // Only reload video if source changed to save resources
+          if (this.videoElement.src !== panel.videoSrc) {
+            this.videoElement.src = panel.videoSrc;
+            this.videoElement.load();
+          }
+          
+          // Play with improved error handling for Quest 3 browser compatibility
+          this.videoElement.play().catch(err => {
+            console.warn("Video play error:", err);
+            updateStatus("Video playback failed. Please check browser permissions.");
+            
+            // Fallback to showing text instead
+            this.videoDisplay.visible = false;
+            this.textElement.visible = true;
+          });
+        } else {
+          // Hide video, show text
+          this.videoDisplay.visible = false;
+          this.textElement.visible = true;
+          this.videoElement.pause();
+        }
+      }
+      
+      showNextPanel() {
+        this.currentPanelIndex++;
+        if (this.currentPanelIndex >= this.panelSequence.length) {
+          this.currentPanelIndex = 0;
+          updateStatus("Panel sequence complete! Starting over...");
+        }
+        this.showCurrentPanel();
+      }
+      
+      update(camera, timestamp) {
+        if (!this.isActive || !this.panelGroup || !camera) return;
+        
+        // Smooth panel positioning with interpolation for Quest 3
+        const cameraDirection = new THREE.Vector3(0, 0, -1);
+        cameraDirection.applyQuaternion(camera.quaternion);
+        cameraDirection.multiplyScalar(this.settings.distanceFromCamera);
+        
+        // Calculate target position
+        this.panelTargetPosition.copy(camera.position).add(cameraDirection);
+        
+        // Smooth interpolation based on frame time
+        const lerpFactor = timestamp ? Math.min(0.1 * (timestamp % 20) / 10, 0.1) : 0.1;
+        
+        // Only update if position changed significantly
+        if (this.panelLastPosition.distanceToSquared(this.panelTargetPosition) > 0.0001 || this.needsUpdate) {
+          this.panelGroup.position.lerp(this.panelTargetPosition, lerpFactor);
+          this.panelGroup.lookAt(camera.position);
+          
+          // Position slightly below eye level for comfort
+          this.panelGroup.position.y = camera.position.y - 0.1;
+          
+          // Store last position
+          this.panelLastPosition.copy(this.panelGroup.position);
+          this.needsUpdate = false;
+        }
+        
+        // Update video texture if playing
+        if (this.videoTexture && this.videoDisplay.visible && !this.videoElement.paused) {
+          this.videoTexture.needsUpdate = true;
+        }
+      }
+      
+      getInteractiveObjects() {
+        return [this.nextButton];
+      }
+    }
+    
+    // Initialize everything
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
